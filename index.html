@@ -1,0 +1,587 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Mis Tareas Pro</title>
+    <style>
+        :root {
+            --bg: #f4f4f9;
+            --card: #ffffff;
+            --text: #222222;
+            --text-muted: #555555;
+            --accent: #007bff;
+            --accent-hover: #0056b3;
+            --danger: #dc3545;
+            --danger-bg: #ffe6e6;
+            --shadow: 0 2px 8px rgba(0,0,0,0.08);
+            --radius: 8px;
+        }
+
+        * { box-sizing: border-box; }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            text-align: center;
+            padding: 20px;
+            background: var(--bg);
+            color: var(--text);
+            max-width: 600px;
+            margin: 0 auto;
+        }
+
+        h1 { margin-bottom: 4px; }
+
+        .sub { color: var(--text-muted); margin-top: 0; margin-bottom: 20px; }
+
+        .controls { display: flex; gap: 10px; justify-content: center; margin-bottom: 16px; }
+
+        #btn-voz {
+            padding: 0;
+            font-size: 28px;
+            border-radius: 50%;
+            cursor: pointer;
+            background: var(--accent);
+            color: white;
+            border: none;
+            width: 60px;
+            height: 60px;
+            box-shadow: 0 4px 12px rgba(0,123,255,0.3);
+            transition: background 0.2s, transform 0.1s;
+        }
+        #btn-voz:active { transform: scale(0.9); }
+        #btn-voz.escuchando {
+            background: var(--danger);
+            box-shadow: 0 4px 12px rgba(220,53,69,0.4);
+            animation: pulse 1.2s infinite;
+        }
+
+        @keyframes pulse {
+            0%   { box-shadow: 0 0 0 0 rgba(220,53,69,0.5); }
+            70%  { box-shadow: 0 0 0 18px rgba(220,53,69,0); }
+            100% { box-shadow: 0 0 0 0 rgba(220,53,69,0); }
+        }
+
+        .lang-select {
+            padding: 6px 10px;
+            border-radius: 6px;
+            border: 1px solid #ccc;
+            font-size: 14px;
+            background: var(--card);
+            cursor: pointer;
+        }
+
+        ul {
+            list-style: none;
+            padding: 0;
+            margin-top: 16px;
+        }
+
+        li {
+            background: var(--card);
+            margin: 8px auto;
+            padding: 14px 16px;
+            width: 90%;
+            border-radius: var(--radius);
+            box-shadow: var(--shadow);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            gap: 8px;
+        }
+
+        li.completada .texto {
+            text-decoration: line-through;
+            opacity: 0.6;
+        }
+
+        .info { display: flex; flex-direction: column; align-items: flex-start; gap: 2px; }
+
+        .texto { font-weight: 500; }
+        .hora { font-size: 0.8em; color: var(--text-muted); }
+
+        .vencida {
+            background: var(--danger-bg);
+            border: 2px solid var(--danger);
+            animation: blink 1s 4;
+        }
+
+        @keyframes blink {
+            0%, 100% { opacity: 1; }
+            50%      { opacity: 0.6; }
+        }
+
+        @media (prefers-reduced-motion: reduce) {
+            .vencida { animation: none; }
+            #btn-voz.escuchando { animation: none; }
+        }
+
+        .btn-borrar {
+            background: var(--danger);
+            color: white;
+            border: none;
+            border-radius: 6px;
+            padding: 6px 12px;
+            cursor: pointer;
+            font-weight: bold;
+            font-size: 16px;
+            flex-shrink: 0;
+        }
+
+        .empty { color: var(--text-muted); margin-top: 40px; }
+
+        .toast {
+            position: fixed; left: 50%; bottom: 24px;
+            transform: translate(-50%, 20px);
+            background: #222; color: #fff;
+            padding: 12px 18px; border-radius: 8px;
+            opacity: 0; transition: .3s;
+            z-index: 99;
+            max-width: 90%;
+            text-align: center;
+            font-size: 14px;
+        }
+        .toast.visible { opacity: 1; transform: translate(-50%, 0); }
+
+        .footer { margin-top: 30px; font-size: 12px; color: var(--text-muted); }
+    </style>
+</head>
+<body>
+    <h1>Mis Tareas Pro</h1>
+    <p class="sub">Di la tarea o pulsa el micrófono</p>
+
+    <div class="controls">
+        <button id="btn-voz" aria-label="Añadir tarea por voz" title="Añadir tarea por voz">🎤</button>
+        <select id="lang" class="lang-select" aria-label="Idioma de reconocimiento">
+            <option value="es-ES">es-ES</option>
+            <option value="es-MX">es-MX</option>
+            <option value="es-AR">es-AR</option>
+            <option value="es-CO">es-CO</option>
+            <option value="en-US">en-US</option>
+        </select>
+    </div>
+
+    <ul id="lista-tareas" role="list" aria-live="polite"></ul>
+    <p id="empty-msg" class="empty">No hay tareas. ¡Añade una!</p>
+
+    <div class="footer">
+        <button id="btn-clear" style="background:none;border:none;color:#999;cursor:pointer;font-size:13px;text-decoration:underline;">Borrar todo</button>
+    </div>
+
+    <script>
+        /* ============================================================
+           ESTADO
+           ============================================================ */
+        const STORAGE_KEY = 'mis_tareas_finales';
+        const SCHEMA_VERSION = 2;
+
+        let tareas = [];
+
+        function cargar() {
+            try {
+                const raw = localStorage.getItem(STORAGE_KEY);
+                if (!raw) return;
+                const datos = JSON.parse(raw);
+                if (datos.version && datos.version < SCHEMA_VERSION) {
+                    // migración futura si fuera necesario
+                }
+                tareas = Array.isArray(datos.tareas) ? datos.tareas : [];
+            } catch {
+                tareas = [];
+                localStorage.removeItem(STORAGE_KEY);
+            }
+        }
+
+        function persistir() {
+            localStorage.setItem(STORAGE_KEY, JSON.stringify({ version: SCHEMA_VERSION, tareas }));
+        }
+
+        /* ============================================================
+           DOM
+           ============================================================ */
+        const btnVoz = document.getElementById('btn-voz');
+        const listaTareas = document.getElementById('lista-tareas');
+        const emptyMsg = document.getElementById('empty-msg');
+        const btnClear = document.getElementById('btn-clear');
+        const langSelect = document.getElementById('lang');
+
+        /* ============================================================
+           RENDER
+           ============================================================ */
+        function render() {
+            listaTareas.innerHTML = '';
+            // ordenar por timestamp
+            tareas.sort((a, b) => a.ts - b.ts);
+            tareas.forEach(t => {
+                const li = document.createElement('li');
+                li.dataset.id = t.id;
+                li.dataset.ts = t.ts;
+
+                // check completada
+                if (t.completada) li.classList.add('completada');
+
+                // info
+                const info = document.createElement('div');
+                info.className = 'info';
+
+                const spanTexto = document.createElement('span');
+                spanTexto.className = 'texto';
+                spanTexto.textContent = t.texto;
+
+                if (t.hora) {
+                    const spanHora = document.createElement('span');
+                    spanHora.className = 'hora';
+                    spanHora.textContent = t.hora;
+                    info.append(spanTexto, spanHora);
+                } else {
+                    info.appendChild(spanTexto);
+                }
+
+                // botones
+                const acc = document.createElement('div');
+                acc.style.display = 'flex';
+                acc.style.gap = '6px';
+
+                // toggle completado
+                const btnCheck = document.createElement('button');
+                btnCheck.textContent = t.completada ? '↩' : '✓';
+                btnCheck.style.background = 'none';
+                btnCheck.style.border = 'none';
+                btnCheck.style.cursor = 'pointer';
+                btnCheck.style.fontSize = '18px';
+                btnCheck.style.padding = '4px 8px';
+                btnCheck.style.borderRadius = '4px';
+                btnCheck.ariaLabel = t.completada ? 'Restaurar tarea' : 'Marcar completada';
+                btnCheck.onmouseenter = () => btnCheck.style.background = '#eee';
+                btnCheck.onmouseleave = () => btnCheck.style.background = 'none';
+                btnCheck.onclick = () => toggleCompletada(t.id);
+
+                // borrar
+                const btnDel = document.createElement('button');
+                btnDel.className = 'btn-borrar';
+                btnDel.textContent = 'X';
+                btnDel.ariaLabel = `Borrar tarea: ${t.texto}`;
+                btnDel.onclick = () => eliminarTarea(t.id);
+
+                acc.append(btnCheck, btnDel);
+                li.append(info, acc);
+                listaTareas.appendChild(li);
+            });
+
+            emptyMsg.style.display = tareas.length === 0 ? 'block' : 'none';
+        }
+
+        /* ============================================================
+           ACCIONES
+           ============================================================ */
+        function agregarTarea(texto, hora) {
+            const tarea = {
+                id: Date.now(),
+                texto: texto.trim(),
+                hora: hora || null,
+                ts: hora ? parsearHora(texto) : null,
+                completada: false
+            };
+            tareas.push(tarea);
+            persistir();
+            render();
+            hablar('Guardado: ' + tarea.texto);
+        }
+
+        function eliminarTarea(id) {
+            tareas = tareas.filter(t => t.id !== id);
+            persistir();
+            render();
+        }
+
+        function toggleCompletada(id) {
+            const t = tareas.find(t => t.id === id);
+            if (t) {
+                t.completada = !t.completada;
+                persistir();
+                render();
+            }
+        }
+
+        function borrarTodo() {
+            if (confirm('¿Borrar todas las tareas?')) {
+                tareas = [];
+                persistir();
+                render();
+            }
+        }
+
+        btnClear.onclick = borrarTodo;
+
+        /* ============================================================
+           PARSER DE HORAS EN ESPAÑOL
+           ============================================================ */
+        function parsearHora(texto) {
+            // 1) Intentar HH:MM tradicional
+            const m = texto.match(/(\d{1,2}):(\d{2})/);
+            if (m) {
+                let h = parseInt(m[1]);
+                const min = parseInt(m[2]);
+                if (h > 12) h = h; // 24h ok
+                const hoy = new Date();
+                // si la hora ya pasó hoy, asumir mañana
+                const d = new Date();
+                d.setHours(h, min, 0, 0);
+                if (d < hoy) d.setDate(d.getDate() + 1);
+                return d.getTime();
+            }
+
+            // 2) Mapeo de horas en español
+            const palabras = texto.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+            const H = {
+                'una':1,'uno':1,'dos':2,'tres':3,'cuatro':4,'cinco':5,
+                'seis':6,'siete':7,'ocho':8,'nueve':9,'diez':10,
+                'once':11,'doce':12,'trece':13,'catorce':14,'quince':15,
+                'dieciseis':16,'diecisiete':17,'dieciocho':18,'diecinueve':19,'veinte':20,
+                'veintiuno':21,'veintidos':22,'veintitres':23,'veinticuatro':24
+            };
+            const MIN = {
+                'cero':0,'uno':5,'dos':10,'tres':15,'cuatro':20,'cinco':25,'seis':30,
+                'siete':35,'ocho':40,'nuevo':45,'nueve':45,'diez':50,'once':55,
+                'quinto':5,'diez':10,'quince':15,'veinte':20,'veinticinco':25,
+                'treinta':30,'cuarenta':40,'cuarenta y cinco':45,'cincuenta':50,'cincuenta y cinco':55,
+                'y':0,'menos':0
+            };
+
+            let horaNum = null;
+            let minNum = 0;
+            let minus = false;
+
+            // Buscar hora
+            for (const [palabra, num] of Object.entries(H)) {
+                if (num <= 24 && palabras.includes(palabra)) {
+                    horaNum = num > 12 ? num - 12 : num;
+                    break;
+                }
+            }
+
+            // Buscar minutos
+            const partes = palabras.split(' ');
+            let i = 0;
+            while (i < partes.length) {
+                const p = partes[i];
+                if (p === 'y' && i + 1 < partes.length) {
+                    const siguiente = partes[i + 1];
+                    if (MIN[siguiente] !== undefined) {
+                        minNum = MIN[siguiente];
+                        i++;
+                    }
+                } else if (p === 'menos' && i + 1 < partes.length) {
+                    const siguiente = partes[i + 1];
+                    if (MIN[siguiente] !== undefined) {
+                        minNum = 60 - MIN[siguiente];
+                        minus = true;
+                        i++;
+                    }
+                }
+                i++;
+            }
+
+            if (horaNum !== null) {
+                if (minus && horaNum > 0) horaNum--;
+                const hoy = new Date();
+                const d = new Date();
+                d.setHours(horaNum, minNum, 0, 0);
+                if (d < hoy) d.setDate(d.getDate() + 1);
+                return d.getTime();
+            }
+
+            return null;
+        }
+
+        /* ============================================================
+           UTILIDADES DE UI
+           ============================================================ */
+        function avisar(msg) {
+            const t = document.createElement('div');
+            t.className = 'toast';
+            t.textContent = msg;
+            document.body.appendChild(t);
+            requestAnimationFrame(() => t.classList.add('visible'));
+            setTimeout(() => t.classList.remove('visible'), 4000);
+            setTimeout(() => t.remove(), 4500);
+        }
+
+        function hablar(texto) {
+            if ('speechSynthesis' in window) {
+                window.speechSynthesis.cancel();
+                const u = new SpeechSynthesisUtterance(texto);
+                u.lang = langSelect.value || 'es-ES';
+                u.rate = 1;
+                window.speechSynthesis.speak(u);
+            }
+        }
+
+        let ctxAudio = null;
+        function pitar() {
+            try {
+                ctxAudio = ctxAudio || new (window.AudioContext || window.webkitAudioContext)();
+                const osc = ctxAudio.createOscillator();
+                const gain = ctxAudio.createGain();
+                gain.gain.value = 0.12;
+                osc.type = 'sine';
+                osc.frequency.value = 880;
+                osc.connect(gain).connect(ctxAudio.destination);
+                osc.start();
+                osc.stop(ctxAudio.currentTime + 0.3);
+            } catch {}
+        }
+
+        /* ============================================================
+           RELÓJ / ALERTAS
+           ============================================================ */
+        let ultimaAlerta = 0;
+
+        setInterval(() => {
+            const ahora = Date.now();
+            tareas.forEach(t => {
+                if (t.ts && t.ts <= ahora && !t.completada) {
+                    // evitar spam: una alerta por tarea por minuto
+                    const clave = `alerta-${t.id}`;
+                    const ultima = localStorage.getItem(clave);
+                    const ahoraMin = Math.floor(ahora / 60000);
+                    if (!ultima || ultima !== ahoraMin) {
+                        localStorage.setItem(clave, ahoraMin);
+                        const li = listaTareas.querySelector(`[data-id="${t.id}"]`);
+                        if (li && !li.classList.contains('vencida')) {
+                            li.classList.add('vencida');
+                            pitar();
+                            avisar('⏰ RECORDATORIO: ' + t.texto);
+                        }
+                    }
+                }
+            });
+        }, 10000); // revisar cada 10s, no cada segundo
+
+        /* ============================================================
+           RECONOCIMIENTO DE VOZ
+           ============================================================ */
+
+        // Limpieza de comandos de voz
+        function limpiarComando(texto) {
+            return texto
+                .replace(/^(añade|añadir|agregar|apunta|anota|nueva|crear|pon|poner|añade )\s*/i, '')
+                .replace(/\s+añade|agregar|añadir\s*$/i, '')
+                .trim();
+        }
+
+        function parsearTextoVoz(raw) {
+            const texto = raw.toLowerCase();
+            let comando = limpiarComando(texto);
+            let hora = null;
+
+            // buscar hora en el texto
+            const ts = parsearHora(texto);
+            if (ts) {
+                hora = formatHora(ts);
+            }
+
+            return { texto: comando, hora };
+        }
+
+        function formatHora(ts) {
+            const d = new Date(ts);
+            return d.toLocaleTimeString('es', { hour: '2-digit', minute: '2-digit' });
+        }
+
+        if ('SpeechRecognition' in window || 'webkitSpeechRecognition' in window) {
+            const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+            let recognition = new SR();
+            recognition.lang = langSelect.value || 'es-ES';
+            recognition.interimResults = true;
+            recognition.continuous = false;
+
+            let isListening = false;
+
+            function startListening() {
+                if (isListening) return;
+                recognition.lang = langSelect.value || 'es-ES';
+                try {
+                    recognition.start();
+                    isListening = true;
+                    btnVoz.classList.add('escuchando');
+                    btnVoz.ariaLabel = 'Escuchando...';
+                } catch (e) {
+                    avisar('Error al iniciar el micrófono');
+                }
+            }
+
+            function stopListening() {
+                isListening = false;
+                btnVoz.classList.remove('escuchando');
+                btnVoz.ariaLabel = 'Añadir tarea por voz';
+            }
+
+            btnVoz.onclick = startListening;
+
+            recognition.onresult = (event) => {
+                let resultado = event.results[event.results.length - 1];
+                let isFinal = resultado.isFinal;
+                let texto = resultado[0].transcript;
+
+                if (isFinal) {
+                    stopListening();
+
+                    if (texto.includes('borrar todo') || texto.includes('borrar las tareas')) {
+                        borrarTodo();
+                        return;
+                    }
+
+                    const { texto: tareaTexto, hora } = parsearTextoVoz(texto);
+                    if (tareaTexto.length > 0) {
+                        agregarTarea(tareaTexto, hora);
+                    } else {
+                        avisar('No entendí qué tarea añadir');
+                    }
+                }
+            };
+
+            recognition.onerror = (event) => {
+                stopListening();
+                const mensajes = {
+                    'no-speech': 'No escuché nada. ¿Puedes hablar más alto?',
+                    'audio-capture': 'No hay micrófono detectado.',
+                    'not-allowed': 'Permiso de micrófono denegado.',
+                    'network': 'Error de red. Revisa tu conexión.'
+                };
+                avisar(mensajes[event.error] || `Error: ${event.error}`);
+            };
+
+            recognition.onend = stopListening;
+
+            // reiniciar si se cierra solo
+            recognition.addEventListener('nomatch', () => {
+                if (isListening) {
+                    try { recognition.start(); } catch {}
+                }
+            });
+        } else {
+            btnVoz.disabled = true;
+            btnVoz.title = 'Tu navegador no soporta reconocimiento de voz';
+            avisar('Tu navegador no soporta reconocimiento de voz');
+        }
+
+        /* ============================================================
+           SERVICE WORKER (PWA)
+           ============================================================ */
+        if ('serviceWorker' in navigator) {
+            window.addEventListener('load', () => {
+                navigator.serviceWorker.register('./sw.js')
+                    .then(() => console.log('SW registrado'))
+                    .catch(err => console.warn('SW no registrado:', err));
+            });
+        }
+
+        /* ============================================================
+           INICIO
+           ============================================================ */
+        cargar();
+        render();
+    </script>
+</body>
+</html>
